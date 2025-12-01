@@ -10,6 +10,11 @@ class Atom:
     pred: str
     args: Tuple[Term, ...]
 
+    def __str__(self) -> str:
+        if not self.args:
+            return self.pred
+        return f"{self.pred}({', '.join(self.args)})"
+
 @dataclass(frozen=True)
 class Rule:
     head: Atom
@@ -97,45 +102,42 @@ def parse_program(program_text: str) -> List[Rule]:
             rules.append(Rule(head=head, body=tuple()))
     return rules
 
-def prove(program: List[Rule], query: Atom, max_depth: int = 30) -> Tuple[bool, List[str]]:
-    trace: List[str] = []
+def prove(program: List[Rule], query: Atom, max_depth: int = 50) -> Tuple[bool, List[str]]:
+    """
+    Backtracking proof search (depth-first). Returns first proof found + trace.
+    """
 
-    def dfs(goal: Atom, s: Subst, depth: int) -> Optional[Subst]:
+    def dfs(goals: List[Atom], s: Subst, depth: int, trace: List[str]) -> Tuple[Optional[Subst], List[str]]:
         if depth > max_depth:
-            trace.append(f"Depth limit reached while proving {apply_subst_atom(goal, s)}")
-            return None
+            return None, trace + [f"Depth limit reached at goals: {[str(apply_subst_atom(g, s)) for g in goals]}"]
 
-        goal_s = apply_subst_atom(goal, s)
-        trace.append(f"Goal: {goal_s}")
+        if not goals:
+            return s, trace
 
+        goal = apply_subst_atom(goals[0], s)
+
+        # Try each rule/fact that unifies with current goal; if downstream fails, backtrack to next one.
         for r in program:
-            s2 = unify_atoms(r.head, goal_s, s)
+            s2 = unify_atoms(r.head, goal, s)
             if s2 is None:
                 continue
 
             head_s = apply_subst_atom(r.head, s2)
 
             if not r.body:
-                trace.append(f"  Matched FACT: {head_s}")
-                return s2
+                t2 = trace + [f"Goal: {goal}", f"  Matched FACT: {head_s}"]
+                res, tr = dfs(goals[1:], s2, depth + 1, t2)
+                if res is not None:
+                    return res, tr
+            else:
+                body_s = [apply_subst_atom(a, s2) for a in r.body]
+                body_str = ", ".join(str(a) for a in body_s)
+                t2 = trace + [f"Goal: {goal}", f"  Matched RULE: {head_s} :- {body_str}"]
+                res, tr = dfs(list(r.body) + goals[1:], s2, depth + 1, t2)
+                if res is not None:
+                    return res, tr
 
-            body_str = ", ".join(str(apply_subst_atom(a, s2)) for a in r.body)
-            trace.append(f"  Matched RULE: {head_s} :- {body_str}")
+        return None, trace + [f"Goal: {goal}", f"  Fail: {goal}"]
 
-            s_work = dict(s2)
-            ok = True
-            for subgoal in r.body:
-                res = dfs(subgoal, s_work, depth + 1)
-                if res is None:
-                    ok = False
-                    break
-                s_work = res
-
-            if ok:
-                return s_work
-
-        trace.append(f"  Fail: {goal_s}")
-        return None
-
-    result = dfs(query, {}, 0)
-    return (result is not None), trace
+    subst, trace = dfs([query], {}, 0, [])
+    return (subst is not None), trace
